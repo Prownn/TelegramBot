@@ -110,6 +110,8 @@ public class TelegramBot extends TelegramLongPollingBot {
         //Создание объекта сообщения
         SendMessage message = new SendMessage(String.valueOf(chatId), answer);
 
+        //tt
+
 
 //создание клавиатуры
         ReplyKeyboardMarkup replyKeyboardMarkup = createReplyKeyboardMarkup(buttons);
