@@ -1,6 +1,11 @@
 package com.j4.krevetka.service;
 
 import com.j4.krevetka.config.Config;
+import com.j4.krevetka.schema.Subscriber;
+import com.j4.krevetka.untils.CronUtils;
+import javassist.ClassPath;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -9,11 +14,47 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMar
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.text.ParseException;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import com.owlike.genson.Genson;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Component
 public class TelegramBot extends TelegramLongPollingBot {
     final Config config;
+    private ArrayList<Subscriber> subscribers;
+
+    private Genson genson;
+
+    private ClassPathResource resource = new ClassPathResource("Data/subscriber.json");
+
+    private File file = resource.getFile();
+
+    public TelegramBot(Config config) throws IOException {
+        this.config = config;
+        this.genson = new Genson.Builder().create();
+
+        ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+        FileReader fileReader = new FileReader(file);
+
+        try {
+            this.subscribers = OBJECT_MAPPER.readValue(fileReader,
+                    OBJECT_MAPPER.getTypeFactory().constructCollectionType(List.class, Subscriber.class));
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+    }
 
     private void sendMessage(SendMessage message) {
         try {
@@ -33,6 +74,7 @@ public class TelegramBot extends TelegramLongPollingBot {
 
         ArrayList<KeyboardRow> buttonRows = new ArrayList<>();
 
+
         //создание кнопок
         for (String button : buttons) {
             KeyboardRow row = new KeyboardRow();
@@ -40,15 +82,13 @@ public class TelegramBot extends TelegramLongPollingBot {
             buttonRows.add(row);
         }
 
+
         //Установка клавиатуры в сообщение
         replyKeyboardMarkup.setKeyboard(buttonRows);
 
         return replyKeyboardMarkup;
     }
 
-    public TelegramBot(Config config) {
-        this.config = config;
-    }
 
     public String getBotUsername() {
         return config.getBotName();
@@ -59,93 +99,107 @@ public class TelegramBot extends TelegramLongPollingBot {
         return config.getToken();
     }
 
+    private void onStart(long chatId) {
+        SendMessage response = Service.getResponseStart(chatId);
+        sendMessage(response);
+    }
+
+    private void onJavaGroupsMenu(long chatId) {
+        SendMessage response = Service.getResponseJavaGroupsMenu(chatId);
+        sendMessage(response);
+    }
+
+    private void onJavaTimeGroup(long chatId, String group) {
+        SendMessage response = Service.getResponseJavaTimeGroup(chatId, group);
+        sendMessage(response);
+    }
+
+    public void updateSubscrobersList(){
+        try (FileWriter writer = new FileWriter(file, false)) {
+            genson.serialize(subscribers, writer);
+        }catch (IOException e){
+            e.printStackTrace();
+        }
+    }
+
+
+    @Override
     public void onUpdateReceived(Update update) {
+        System.out.println(update.getMessage().getChatId());
+
+
+        // пришло ли сообщение и есть ли там текст
         if (update.hasMessage() && update.getMessage().hasText()) {
             String messageText = update.getMessage().getText();
             long chatId = update.getMessage().getChatId();
 
-            System.out.println(messageText);
+            final String CMD_SUBSCRIBE = "Подписаться на уведомление ";
 
+            // обработка команд
             switch (messageText) {
-                case "JAVA" -> onJavaGroupsMenu(chatId, update.getMessage().getChat().getFirstName());
-                case "J1", "J2", "J3", "J4", "J(пректная группа)" ->
-                        onJavaGroupsMenu(chatId, update.getMessage().getChat().getFirstName());
-
-                default -> onStart(chatId, update.getMessage().getChat().getFirstName());
+                case "JAVA" -> onJavaGroupsMenu(chatId);
+                case "J1", "J2", "J3", "J4" -> onJavaTimeGroup(chatId, messageText);
+                case CMD_SUBSCRIBE + "J1", CMD_SUBSCRIBE + "J2", CMD_SUBSCRIBE + "J3", CMD_SUBSCRIBE + "J4" -> {
+                    try {
+                        onSubscribe(chatId, messageText);
+                    } catch (ParseException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+                default -> onStart(chatId);
             }
         }
     }
 
-    private void onStart(long chatId, String name) {
-        System.out.println("\uD83D\uDD25 reqest " + name + ": /Start");
 
-        //подготовка данных
-        String answer = "https://media1.tenor.com/m/x8v1oNUOmg4AAAAd/rickroll-roll.gif";
-        String[] buttons = new String[]{
-                "Java"
-        };
+    private void onSubscribe(long chatId, String command) throws ParseException {
+        String regex = "Подписаться на уведомление ([A-Z]\\d)";
+        Pattern pattern = Pattern.compile(regex);
+        Matcher matcher = pattern.matcher(command);
 
-        //создание объекта сообщения
-        SendMessage message = new SendMessage(String.valueOf(chatId), answer);
+        String group = "";
+        String cronExpression = "";
 
-        //создание клавиатуры
-        ReplyKeyboardMarkup replyKeyboardMarkup = createReplyKeyboardMarkup(buttons);
-        message.setReplyMarkup(replyKeyboardMarkup);
-
-        sendMessage(message);
-    }
-
-    private void onJavaGroupsMenu(long chatId, String name) {
-        System.out.println("\uD83D\uDD25 reqest " + name + ": Прогромирование JAVA");
-
-        //ПОДГОТОВКА ДАННЫХ
-        String answer = "Выберите направление";
-        String[] buttons = new String[]{
-                "J1", "J2",
-                "J3", "J4",
-                "J(Проектная группа)",
-                "Начало"
-        };
-
-        //Создание объекта сообщения
-        SendMessage message = new SendMessage(String.valueOf(chatId), answer);
-
-        //tt
-
-
-//создание клавиатуры
-        ReplyKeyboardMarkup replyKeyboardMarkup = createReplyKeyboardMarkup(buttons);
-        message.setReplyMarkup(replyKeyboardMarkup);
-
-        sendMessage(message);
-
-
-    }
-
-    private void onJavaTimeGroup(long chatId, String group) {
-
-        String answer = "Расписание группы " + group + ":\n";
-
-        switch (group) {
-            case "J1" -> answer += "Понидельник - 10 00 - 11 00\n Четверг - 10 00 - 11 40";
-            case "J2" -> answer += "Понидельник - 16 00 - 17 00\n Среда - 16 00 - 17 40";
-            case "J3" -> answer += "Среда - 10 00 - 11 40\n Суббота - 14 00 - 15 40";
-            case "J4" -> answer += "Среда - 18 00 - 19 40\n Суббота - 16 00 - 17 40";
+        while (matcher.find()) {
+            group = matcher.group(1);
+            System.out.println(group);
         }
 
-        String[] buttons = new String[]{
-                "Подписаться на уведомления " + group,
-                "Начало"};
+        System.out.println(group);
 
-        //Создание объекта сообщения
-        SendMessage message = new SendMessage(String.valueOf(chatId), answer);
+        switch (group) {
+            case "J1" -> cronExpression = "*/1 * * * * ?";
+            case "J2" -> cronExpression = "0 15 15 ? * 2,4";
+            case "J3" -> cronExpression = "0 9 13 ? * 4,7";
+            case "J4" -> cronExpression = "0 15 17 ? * 4,7";
+        }
+        Date nextExecutionTime = CronUtils.getNextExecutionTime(cronExpression);
 
+        subscribers.add(new Subscriber(chatId, nextExecutionTime, cronExpression));
 
-//создание клавиатуры
-        ReplyKeyboardMarkup replyKeyboardMarkup = createReplyKeyboardMarkup(buttons);
-        message.setReplyMarkup(replyKeyboardMarkup);
+        updateSubscrobersList();
 
-        sendMessage(message);
+        SendMessage respone = Service.getResponseSubscribe(chatId, group);
+        sendMessage(respone);
     }
 
+
+    @Scheduled(initialDelay = 1000, fixedDelay = 1000)
+    public void sendNotifications() throws ParseException {
+        for (Subscriber sub : subscribers) {
+            long chatId = sub.getChatId();
+
+            if (sub.getNextExecutionTime().before(new Date())) {
+                String cronExpression = sub.getCronExpression();
+                Date nextExecutionTime = CronUtils.getNextExecutionTime(cronExpression);
+
+                sub.setNextExecutionTime(nextExecutionTime);
+
+                SendMessage message = new SendMessage(String.valueOf(chatId), "This is your " + cronExpression + "notofication!");
+
+
+                sendMessage(message);
+            }
+        }
+    }
 }
